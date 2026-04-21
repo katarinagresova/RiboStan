@@ -1,0 +1,18 @@
+---
+description: Plot output format convention for RiboStan scripts
+alwaysApply: true
+---
+
+# Plot Output Format
+
+Always save plots as **PNG**, never PDF.
+
+```r
+# ✅ GOOD
+ggsave("my_plot.png", p, width = 9, height = 5, dpi = 150)
+
+# ❌ BAD
+ggsave("my_plot.pdf", p, width = 9, height = 5)
+```
+
+This applies to all R scripts in the repo (`scripts/`, `vignettes/`, etc.).
