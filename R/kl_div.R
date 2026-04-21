@@ -148,7 +148,7 @@ get_metacodon_profs <- function(covgrs, anno, n_wind_l_ext = 45) {
     rlsplitcov <- split(resize(covgr, 1, "start"), covgr$readlen)
     lapply(rlsplitcov, coverage)
   })
-  lapplyfunc <- if('paralell'%in%installed.packages()){
+  lapplyfunc <- if('parallel'%in%installed.packages()){
     rust_roel <- parallel::mclapply(
       mc.cores = detectCores(), cdsfpcovlist, cds_codons = cds_codons,
       FUN = get_cov_rust_scores

@@ -265,8 +265,7 @@ get_psite_gr <- function(rpfs, offsets_df, anno) {
     .[order(as.numeric(names(.)))] %>%
     shift(-.$p_offset) %>%
     sort()
-  # add in phase to the ambiguous ones
-  uniq_mov_rpfs$p_offset <- NULL
+  # p_offset is kept so the general shift below can apply it correctly
   rpfs[names(uniq_mov_rpfs)] <- uniq_mov_rpfs
 
   psites <- rpfs %>%
@@ -274,26 +273,44 @@ get_psite_gr <- function(rpfs, offsets_df, anno) {
     resize(1, "start") %>%
     shift(., .$p_offset)
   psites <- psites[!is_out_of_bounds(psites)]
-  # phaseshift the psites
 
-  rl_phs_ <- mcols(psites)[, c("phase", "readlen")] %>%
-    as.data.frame() %>%
-    group_by(.data$phase, .data$readlen) %>%
-    tally()
-  shiftdf <- rl_phs_ %>%
+  # Phaseshift calibration:
+  #   The shiftdf maps (readlen, phase) -> a shift in {0,1,2} by rank-order
+  #   of counts. This must be calibrated on data with STRONG periodicity
+  #   (annotated CDS). If we instead rank over all psites (including
+  #   uORFs, novel ORFs, or near-uniform null data), small count
+  #   fluctuations give essentially arbitrary rank assignments and the
+  #   downstream F-test becomes mis-calibrated (~14% false positives at
+  #   p<0.05 on pure null data instead of the nominal 5%).
+  cds_ids <- if (!is.null(anno$uORF)) {
+    names(anno$uORF)[!anno$uORF]
+  } else {
+    names(anno$trspacecds)
+  }
+  calib_mask <- as.character(psites$orf) %in% cds_ids
+  calib_mcols <- if (any(calib_mask)) {
+    mcols(psites)[calib_mask, c("phase", "readlen")]
+  } else {
+    mcols(psites)[, c("phase", "readlen")]
+  }
+  shiftdf <- as.data.frame(calib_mcols) %>%
+    dplyr::count(.data$phase, .data$readlen) %>%
     group_by(.data$readlen) %>%
     mutate(shft = rank(-.data$n) - 1) %>%
-    as.data.frame()
+    ungroup() %>%
+    select("phase", "readlen", "shft")
 
-  phaseshifts <- merge(
-    mcols(psites)[, c("phase", "readlen")],
-    shiftdf,
-    all.x = TRUE
-  )
-  #
+  # Order-preserving lookup. merge() was used previously which sorts by
+  # the join keys and mis-aligns the shft vector with psites, giving an
+  # essentially random shft per P-site (77% null false-positive rate).
+  shft_per_row <- as.data.frame(mcols(psites)[, c("phase", "readlen")]) %>%
+    dplyr::left_join(shiftdf, by = c("phase", "readlen")) %>%
+    dplyr::pull("shft")
+  shft_per_row[is.na(shft_per_row)] <- 0L
+
   psites <- psites %>%
     GenomicRanges::shift(-.$phase) %>%
-    GenomicRanges::shift(phaseshifts$shft)
+    GenomicRanges::shift(shft_per_row)
   psites
 }
 
