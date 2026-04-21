@@ -32,7 +32,10 @@ Suggests:
     BSgenome.Hsapiens.UCSC.hg38,
     AnnotationHub,
     BiocStyle,
+LinkingTo:
+    Rcpp,
 Imports:
+    Rcpp,
     rtracklayer,
     rstan,
     Matrix,
@@ -53,7 +56,6 @@ Imports:
     multitaper,
     tidyr,
     magrittr,
-    ORFik,
     broom,
     tibble,
     parallel,

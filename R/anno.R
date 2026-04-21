@@ -498,7 +498,8 @@ convert_gtf <- function(anno, keep_cols){
 #'     missing a valid stop codon
 #' @param keep_cols columns to save from the gtf metadata
 #' @param DEFAULT_CIRC_SEQS default chromsoomes to treat as circular
-#' @param findUORFs_args Additional arguments to pass to ORFik::findUORFs
+#' @param findUORFs_args Additional arguments to pass to \code{find_uorfs}
+#'   (e.g. \code{c(minimumLength=0, longestORF=FALSE)})
 #' @details This takes only coding sequences which are a multiple of 3bp and
 #' have a start and a stop on either end. it always returns coding sequences
 #' without the stops, regardless of their extent in the input.
@@ -581,9 +582,9 @@ load_annotation <- function(
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
     fiveutrs <- fiveutrs[validutrs]
-    alluORFs <- do.call(what=ORFik::findUORFs, args = c(findUORFs_args,list(
-      fiveUTRs = fiveutrs, 
-      fa = fafile ,
+    alluORFs <- do.call(what=find_uorfs, args = c(findUORFs_args,list(
+      fiveUTRs = fiveutrs,
+      fa = fafile,
       cds = cdsgrl[validutrs]
     )))
     alluORFs <- alluORFs %>%
