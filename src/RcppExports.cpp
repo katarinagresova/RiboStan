@@ -11,16 +11,16 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // find_orfs_cpp
-List find_orfs_cpp(CharacterVector seqs, std::string start_codon, CharacterVector stop_codons, int min_body);
-RcppExport SEXP _Ribostan_find_orfs_cpp(SEXP seqsSEXP, SEXP start_codonSEXP, SEXP stop_codonsSEXP, SEXP min_bodySEXP) {
+List find_orfs_cpp(CharacterVector seqs, CharacterVector start_codons, CharacterVector stop_codons, int min_body);
+RcppExport SEXP _Ribostan_find_orfs_cpp(SEXP seqsSEXP, SEXP start_codonsSEXP, SEXP stop_codonsSEXP, SEXP min_bodySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< CharacterVector >::type seqs(seqsSEXP);
-    Rcpp::traits::input_parameter< std::string >::type start_codon(start_codonSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type start_codons(start_codonsSEXP);
     Rcpp::traits::input_parameter< CharacterVector >::type stop_codons(stop_codonsSEXP);
     Rcpp::traits::input_parameter< int >::type min_body(min_bodySEXP);
-    rcpp_result_gen = Rcpp::wrap(find_orfs_cpp(seqs, start_codon, stop_codons, min_body));
+    rcpp_result_gen = Rcpp::wrap(find_orfs_cpp(seqs, start_codons, stop_codons, min_body));
     return rcpp_result_gen;
 END_RCPP
 }

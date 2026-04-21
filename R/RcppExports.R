@@ -4,14 +4,17 @@
 #' Find ORFs in a character vector of nucleotide sequences
 #'
 #' @param seqs Character vector of uppercase DNA sequences.
-#' @param start_codon Length-1 character; start codon (default "ATG").
+#' @param start_codons Character vector of start codons to search for
+#'   (e.g. \code{c("ATG","CTG","GTG")}).
 #' @param stop_codons Character vector; stop codons.
 #' @param min_body Integer; minimum body length in nucleotides between the end
 #'   of the start codon and the beginning of the stop codon.
-#' @return A list with three integer vectors: \code{starts}, \code{ends}
-#'   (1-based, inclusive), and \code{indices} (1-based index into \code{seqs}).
+#' @return A list with four integer vectors: \code{starts}, \code{ends}
+#'   (1-based, inclusive), \code{indices} (1-based index into \code{seqs}),
+#'   and \code{start_codon_idx} (1-based index into \code{start_codons}
+#'   identifying which start codon was matched).
 #' @keywords internal
-find_orfs_cpp <- function(seqs, start_codon, stop_codons, min_body = 0L) {
-    .Call('_Ribostan_find_orfs_cpp', PACKAGE = 'Ribostan', seqs, start_codon, stop_codons, min_body)
+find_orfs_cpp <- function(seqs, start_codons, stop_codons, min_body = 0L) {
+    .Call(`_Ribostan_find_orfs_cpp`, seqs, start_codons, stop_codons, min_body)
 }
 

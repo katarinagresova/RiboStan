@@ -17,7 +17,9 @@
 #'   transcript.
 #' @param fa Character path to an indexed genome FASTA file, or a
 #'   \code{FaFile} object.
-#' @param startCodon Character; start codon to search for (default \code{"ATG"}).
+#' @param startCodon Character vector; start codons to search for. Defaults
+#'   to \code{c("ATG","CTG","GTG")} so that non-canonical starts (CUG/GUG
+#'   in RNA) are found in addition to ATG.
 #' @param stopCodons Character vector; stop codons to recognise
 #'   (default \code{c("TAA", "TAG", "TGA")}).
 #' @param longestORF Logical; if \code{TRUE}, keep only the longest ORF sharing
@@ -26,13 +28,15 @@
 #'   end of the start codon and the beginning of the stop codon.  \code{0}
 #'   (the default) accepts any ORF consisting of just a start and a stop.
 #' @param cds \code{GRangesList} of CDS exons.  When supplied, the CDS is
-#'   appended to the 5' UTR search space and detected ORFs that coincide with
-#'   the annotated CDS are removed.
+#'   appended to the 5' UTR search space and detected ORFs that are exact
+#'   duplicates of an annotated CDS (sharing both start and stop position)
+#'   are removed. Overlapping/nested ORFs are retained.
 #' @return A \code{GRangesList} of uORFs in genomic coordinates, named
-#'   \code{"<transcript_id>_<N>"}.
+#'   \code{"<transcript_id>_<N>"}. Each element carries a metadata column
+#'   \code{start_codon} giving the start codon that was matched.
 #' @keywords internal
 find_uorfs <- function(fiveUTRs, fa,
-                       startCodon    = "ATG",
+                       startCodon    = c("ATG", "CTG", "GTG"),
                        stopCodons    = c("TAA", "TAG", "TGA"),
                        longestORF    = FALSE,
                        minimumLength = 0L,
@@ -51,11 +55,12 @@ find_uorfs <- function(fiveUTRs, fa,
   ))
 
   ## 3. Find ORFs in transcript coordinates (via C++) ----------------------
+  start_codons <- toupper(as.character(startCodon))
   raw <- find_orfs_cpp(
-    seqs        = seqs,
-    start_codon = toupper(startCodon),
-    stop_codons = toupper(stopCodons),
-    min_body    = as.integer(minimumLength)
+    seqs         = seqs,
+    start_codons = start_codons,
+    stop_codons  = toupper(stopCodons),
+    min_body     = as.integer(minimumLength)
   )
 
   if (length(raw$starts) == 0L) return(GenomicRanges::GRangesList())
@@ -70,6 +75,8 @@ find_uorfs <- function(fiveUTRs, fa,
     )
     raw <- lapply(raw, `[`, keep)
   }
+
+  start_codon_hit <- start_codons[raw$start_codon_idx]
 
   ## 4. Map to genomic coordinates -----------------------------------------
   # tx_idx: which element of search_space each ORF belongs to (1-based)
@@ -97,8 +104,15 @@ find_uorfs <- function(fiveUTRs, fa,
   )
   names(genomic_grl)  <- paste0(tx_names_rep, "_", rank)
   seqinfo(genomic_grl) <- seqinfo(fiveUTRs)
+  # Record which start codon produced each uORF. Attach at both the GRL
+  # level (one value per uORF) and the inner GRanges level (one value
+  # per exon, same value for all exons of a uORF) so the column survives
+  # the unlist() / split() cycle in load_annotation.
+  S4Vectors::mcols(genomic_grl)$start_codon <- start_codon_hit
+  S4Vectors::mcols(genomic_grl@unlistData)$start_codon <-
+    rep(start_codon_hit, S4Vectors::elementNROWS(genomic_grl))
 
-  ## 6. Filter ORFs that coincide with annotated CDS -----------------------
+  ## 6. Filter ORFs that are exact duplicates of annotated CDS -------------
   if (!is.null(cds) && length(genomic_grl) > 0L) {
     genomic_grl <- .filter_uorfs(genomic_grl, cds)
   }
@@ -193,15 +207,13 @@ find_uorfs <- function(fiveUTRs, fa,
 }
 
 
-#' Remove uORFs that coincide with annotated CDS boundaries
+#' Remove uORFs that exactly duplicate an annotated CDS
 #'
-#' Four checks are applied in sequence:
-#' \enumerate{
-#'   \item ORF is fully within a CDS element.
-#'   \item ORF stop site equals a CDS stop site.
-#'   \item ORF start site equals a CDS start site.
-#'   \item ORF start site falls inside a CDS element.
-#' }
+#' A uORF is dropped only if it shares BOTH its start site and its stop site
+#' with the same annotated CDS (i.e. it \emph{is} the CDS). Overlapping,
+#' nested, and in-frame-extension uORFs are retained so that downstream
+#' analyses can reason about them (see \code{load_annotation} which adds
+#' per-uORF overlap metadata).
 #'
 #' @param uorfs GRangesList of candidate uORFs.
 #' @param cds GRangesList of annotated CDS.
@@ -210,27 +222,23 @@ find_uorfs <- function(fiveUTRs, fa,
 .filter_uorfs <- function(uorfs, cds) {
   if (length(uorfs) == 0L) return(uorfs)
 
-  drop <- function(grl, hits) {
-    idx <- unique(S4Vectors::queryHits(hits))
-    if (length(idx) > 0L) grl[-idx] else grl
-  }
+  start_hits <- GenomicRanges::findOverlaps(
+    .start_sites_gr(uorfs), .start_sites_gr(cds), type = "within"
+  )
+  stop_hits  <- GenomicRanges::findOverlaps(
+    .stop_sites_gr(uorfs),  .stop_sites_gr(cds),  type = "within"
+  )
+  if (length(start_hits) == 0L || length(stop_hits) == 0L) return(uorfs)
 
-  uorfs <- drop(uorfs,
-    GenomicRanges::findOverlaps(uorfs, cds, type = "within"))
-  if (length(uorfs) == 0L) return(uorfs)
-
-  uorfs <- drop(uorfs,
-    GenomicRanges::findOverlaps(
-      .stop_sites_gr(uorfs), .stop_sites_gr(cds), type = "within"))
-  if (length(uorfs) == 0L) return(uorfs)
-
-  uorfs <- drop(uorfs,
-    GenomicRanges::findOverlaps(
-      .start_sites_gr(uorfs), .start_sites_gr(cds), type = "within"))
-  if (length(uorfs) == 0L) return(uorfs)
-
-  drop(uorfs,
-    GenomicRanges::findOverlaps(.start_sites_gr(uorfs), cds, type = "within"))
+  # uORF i duplicates CDS j iff (i, j) appears in BOTH hit sets.
+  start_pairs <- paste(S4Vectors::queryHits(start_hits),
+                       S4Vectors::subjectHits(start_hits), sep = "_")
+  stop_pairs  <- paste(S4Vectors::queryHits(stop_hits),
+                       S4Vectors::subjectHits(stop_hits),  sep = "_")
+  dup_rows <- unique(
+    S4Vectors::queryHits(start_hits)[start_pairs %in% stop_pairs]
+  )
+  if (length(dup_rows) > 0L) uorfs[-dup_rows] else uorfs
 }
 
 

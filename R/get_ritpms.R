@@ -186,28 +186,38 @@ mergeseqlevels <- function(gr1, gr2) {
 }
 
 
-#' convert a granges object of footprints to a psites object
+#' Convert a GRanges of footprints into a psites object
 #'
-#' This function applies offsets to RPF data, attributing to each RPF
-#' an offset specific a readlength and phase. Where phase is ambigous,
-#' because more than one ORF overlaps the RPF, the RPF has both offsets
-#' applied, and in rare cases where more than one possible psite location
-#' applies, one is randomly selected.
+#' Applies P-site offsets to RPFs, attributing each RPF to every ORF it
+#' overlaps. A read overlapping \eqn{k} ORFs produces \eqn{k} psite rows,
+#' each carrying its own \code{orf} attribution together with the phase,
+#' read length and P-site offset associated with that ORF.
+#'
+#' Each psite additionally carries a \code{read_mult} integer mcol giving
+#' the number of ORF overlaps its source read had. Periodicity testing
+#' (\code{ftest_orfs}) treats every psite as full evidence for its
+#' attributed ORF (so nested / overlapping ORFs both get full coverage).
+#' Quantification (\code{get_ritpms} / \code{get_read_spmat}) row-
+#' normalises by read name so that each read contributes total weight 1
+#' across all its ORF attributions; nothing is double-counted in TPM
+#' space.
+#'
 #' @keywords Ribostan
 #' @author Dermot Harnett, \email{dermot.p.harnett@gmail.com}
 #'
-#' @param rpfs - granges object with positions of footprints, in transcript
-#' space
-#' @param offsets_df - a data frame with numeric columns readlen,phase,offset
-#' @param anno - an annotation object with at least one ORF per transcript,
-#' the function uses the 'uORF' slot if it's available
-#' @return a GRanges object of width-1 psites with columns readlen,
-#' phase and offset
+#' @param rpfs GRanges with read positions in transcript space.
+#' @param offsets_df Data frame with columns \code{readlen}, \code{phase},
+#'   and \code{p_offset}.
+#' @param anno Annotation object. The \code{uORF} slot is used, if present,
+#'   to restrict the phaseshift calibration to annotated-CDS psites.
+#' @return A GRanges of width-1 psites with mcols \code{orf}, \code{readlen},
+#'   \code{phase}, \code{p_offset}, \code{read_mult}. Reads overlapping
+#'   multiple ORFs are represented once per overlap.
 #' @examples
 #' data(chr22_anno)
 #' data(rpfs)
 #' data(offsets_df)
-#' psites <- get_psite_gr(rpfs, offsets_df, anno)
+#' psites <- get_psite_gr(rpfs, offsets_df, chr22_anno)
 #' @export
 get_psite_gr <- function(rpfs, offsets_df, anno) {
   orfs <- c(anno$trspacecds)
@@ -215,61 +225,37 @@ get_psite_gr <- function(rpfs, offsets_df, anno) {
   rpfs <- mergeseqlevels(rpfs, orfs)
   orfs <- mergeseqlevels(orfs, rpfs)
   #
-  orfov_ind <- findOverlaps(rpfs, orfs, select = "first", ignore.strand = TRUE)
-  rpfs$orf <- S4Vectors::Rle(names(orfs)[orfov_ind])
-  rpfs$phase <- GenomicRanges::start(rpfs) - GenomicRanges::start(orfs)[orfov_ind]
-  rpfs$phase <- rpfs$phase %% 3
+  # Emit one (read, orf) row for every overlap. Reads with no ORF overlap
+  # are dropped here; reads with multiple ORF overlaps produce multiple rows.
+  ov <- GenomicRanges::findOverlaps(rpfs, orfs, ignore.strand = TRUE)
+  if (length(ov) == 0L) {
+    return(rpfs[0])
+  }
+  read_mult_per_read <- tabulate(S4Vectors::queryHits(ov),
+                                 nbins = length(rpfs))
+  rpfs <- rep(rpfs, read_mult_per_read)
+  rpfs$orf <- names(orfs)[S4Vectors::subjectHits(ov)]
+  rpfs$phase <-
+    (GenomicRanges::start(rpfs) -
+       GenomicRanges::start(orfs)[S4Vectors::subjectHits(ov)]) %% 3L
+  # read_mult: number of ORF overlaps for this read (= sibling count
+  # inclusive of this row). Used downstream by get_read_spmat so that each
+  # read's total contribution to quantification is 1 regardless of how
+  # many ORFs it overlaps.
+  rpfs$read_mult <- rep.int(read_mult_per_read[read_mult_per_read > 0L],
+                             read_mult_per_read[read_mult_per_read > 0L])
   #
-  # now get offsets for all
+  # Look up (readlen, phase) -> p_offset
   offsetcols <- c("readlen", "phase", "p_offset")
-  rpfs$p_offset <- rpfs %>%
-    {
-      as.data.frame(mcols(.)[, c("readlen", "phase")])
-    } %>%
-    left_join(
+  rpfs$p_offset <- as.data.frame(mcols(rpfs)[, c("readlen", "phase")]) %>%
+    dplyr::left_join(
       offsets_df %>% select(one_of(offsetcols)),
       by = c("readlen", "phase")
     ) %>%
-    .$p_offset
+    dplyr::pull("p_offset")
   rpfs <- rpfs %>% subset(!is.na(p_offset))
-  orfov <- GenomicRanges::countOverlaps(rpfs, orfs, ignore.strand = TRUE)
-  is_mov_rpf <- orfov > 1
-  # get phase for multi orf alignments
-  mov_rpfs <- rpfs[is_mov_rpf]
-  mov_rpfs_ov <- orfov[is_mov_rpf]
-  mov_rpfs_ind <- findOverlaps(mov_rpfs, orfs, ignore.strand = TRUE)
-  mov_rpfs <- rep(mov_rpfs, mov_rpfs_ov)
-  mov_rpfs$orf <- names(orfs)[subjectHits(mov_rpfs_ind)]
-  mov_rpfs$phase <- GenomicRanges::start(mov_rpfs) - GenomicRanges::start(orfs)[subjectHits(mov_rpfs_ind)]
-  mov_rpfs$phase <- mov_rpfs$phase %% 3
-  # get offsets for our multi orf alignments
-  mov_rpfs$p_offset <- mov_rpfs %>%
-    {
-      as.data.frame(mcols(.)[, c("readlen", "phase")])
-    } %>%
-    left_join(
-      offsets_df %>% select(one_of(offsetcols)),
-      by = c("readlen", "phase")
-    ) %>%
-    .$p_offset
-  #
-  # for the remaining ambigous ones choose randomly
-  uniq_mov_rpfs <- mov_rpfs %>%
-    resize(1, "start") %>%
-    shift(.$p_offset) %>%
-    IRanges::subsetByOverlaps(orfs) %>%
-    sample() %>%
-    {
-      .[match(unique(names(.)), names(.))]
-    } %>%
-    .[order(as.numeric(names(.)))] %>%
-    shift(-.$p_offset) %>%
-    sort()
-  # p_offset is kept so the general shift below can apply it correctly
-  rpfs[names(uniq_mov_rpfs)] <- uniq_mov_rpfs
 
   psites <- rpfs %>%
-    subset(!is.na(p_offset)) %>%
     resize(1, "start") %>%
     shift(., .$p_offset)
   psites <- psites[!is_out_of_bounds(psites)]
@@ -391,6 +377,12 @@ get_read_spmat <- function(psites, anno) {
   orfs <- mergeseqlevels(orfs, psites)
   orfs <- IRanges::subsetByOverlaps(orfs, psites)
   #
+  # One entry per (read, orf) psite. Row-normalising afterwards ensures
+  # every read contributes total weight 1 across its ORFs - so reads that
+  # overlap multiple ORFs are EM-split rather than double-counted in TPM
+  # space. This holds both for the legacy one-psite-per-read output and
+  # for the current per-(read,orf) emission from get_psite_gr; it also
+  # remains correct if upstream filtering has dropped some overlaps.
   spmat <- Matrix::sparseMatrix(
     i = names(psites) %>% id(),
     j = psites$orf %>% id(),

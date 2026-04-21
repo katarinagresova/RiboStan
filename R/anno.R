@@ -301,6 +301,99 @@ get_trspace_cds <- function(cdsgrl, exonsgrl) {
 }
 
 
+#' Annotate each uORF with information about CDS overlap
+#'
+#' For every uORF, determine whether it overlaps any annotated main CDS in
+#' genomic space and (if so) record the id of the overlapped CDS and the
+#' relative reading frame. Frame is computed in transcript space using
+#' \code{pmapToTranscripts} so that it correctly handles multi-exon CDSes.
+#'
+#' @param trspacecds GRanges keyed by orf_id (output of
+#'   \code{get_trspace_cds}). This is modified by adding mcols columns and
+#'   returned.
+#' @param cdsgrl GRangesList of all ORFs in genomic space (CDS + uORFs).
+#' @param is_uORF Named logical vector indicating which elements of
+#'   \code{cdsgrl} are uORFs.
+#' @return \code{trspacecds} with four new mcols:
+#'   \code{overlaps_cds}, \code{overlap_cds_id}, \code{overlap_frame},
+#'   \code{out_of_phase}.
+#' @keywords internal
+.annotate_uorf_overlaps <- function(trspacecds, cdsgrl, is_uORF) {
+  n <- length(trspacecds)
+  overlaps_cds   <- rep(FALSE,    n)
+  overlap_cds_id <- rep(NA_character_, n)
+  overlap_frame  <- rep(NA_integer_,   n)
+  out_of_phase   <- rep(NA,        n)
+
+  uorf_ids <- names(trspacecds)[names(trspacecds) %in% names(is_uORF) &
+                                 is_uORF[names(trspacecds)]]
+  cds_ids  <- setdiff(names(trspacecds), names(is_uORF)[is_uORF])
+
+  if (length(uorf_ids) > 0L && length(cds_ids) > 0L) {
+    uorf_gen <- cdsgrl[uorf_ids]
+    cds_gen  <- cdsgrl[cds_ids]
+
+    hits <- GenomicRanges::findOverlaps(uorf_gen, cds_gen,
+                                         ignore.strand = FALSE)
+    if (length(hits) > 0L) {
+      qh <- S4Vectors::queryHits(hits)
+      sh <- S4Vectors::subjectHits(hits)
+      hit_uorf <- uorf_ids[qh]
+      hit_cds  <- cds_ids[sh]
+
+      # Collapse multiple CDS hits per uORF into a comma-separated id list,
+      # but compute frame against the first one.
+      first_hit_idx <- !duplicated(qh)
+      first_uorf    <- hit_uorf[first_hit_idx]
+      first_cds     <- hit_cds[first_hit_idx]
+
+      # Compute frame: project the uORF's genomic start onto the CDS's
+      # transcript-space coordinates. A uORF in-frame with the CDS has
+      # (uorf_start_in_cds_trspace - cds_start_in_cds_trspace) %% 3 == 0.
+      uorf_starts_gr <- .start_sites_gr(uorf_gen[first_uorf])
+      cds_trs        <- cdsgrl[first_cds]
+      # pmapToTranscripts may return GRanges or GRangesList depending on
+      # input; coerce to GRangesList so indexing/unlist behave uniformly.
+      mapped <- GenomicFeatures::pmapToTranscripts(
+        uorf_starts_gr, cds_trs
+      )
+      if (is(mapped, "GRanges")) {
+        mapped <- GenomicRanges::GRangesList(
+          lapply(seq_along(mapped), function(i) mapped[i])
+        )
+      }
+      # Keep only uORF hits whose start actually maps into the CDS
+      has_map <- S4Vectors::elementNROWS(mapped) > 0L
+      frame_vals <- if (any(has_map)) {
+        mr <- unlist(mapped[has_map], use.names = FALSE)
+        ((GenomicRanges::start(mr) - 1L) %% 3L)
+      } else {
+        integer(0)
+      }
+      first_frame <- rep(NA_integer_, length(first_uorf))
+      first_frame[has_map] <- frame_vals
+
+      # Build per-uORF summary
+      by_uorf <- split(hit_cds, hit_uorf)
+      cds_ids_by_uorf <- vapply(by_uorf, function(x) paste(x, collapse = ","),
+                                character(1))
+
+      idx <- match(first_uorf, names(trspacecds))
+      overlaps_cds[idx]   <- TRUE
+      overlap_cds_id[idx] <- cds_ids_by_uorf[first_uorf]
+      overlap_frame[idx]  <- first_frame
+      out_of_phase[idx]   <- ifelse(is.na(first_frame), NA, first_frame != 0L)
+    }
+  }
+
+  S4Vectors::mcols(trspacecds)$overlaps_cds   <- overlaps_cds
+  S4Vectors::mcols(trspacecds)$overlap_cds_id <- overlap_cds_id
+  S4Vectors::mcols(trspacecds)$overlap_frame  <- overlap_frame
+  S4Vectors::mcols(trspacecds)$out_of_phase   <- out_of_phase
+  trspacecds
+}
+
+
 #' Get a set of filtered cds from an imported GTF GRanges
 #'
 #' @keywords Ribostan
@@ -598,6 +691,14 @@ load_annotation <- function(
     alluORFs$gene_id <- trgiddf$gene_id[
       match(alluORFs$transcript_id, trgiddf$transcript_id)
     ]
+    # Build a lookup from uORF id -> start codon, taking the first row
+    # per uORF (all exons of a uORF share the same start_codon value).
+    uorf_start_codon_lookup <- if (!is.null(alluORFs$start_codon)) {
+      first_idx <- !duplicated(names(alluORFs))
+      setNames(alluORFs$start_codon[first_idx], names(alluORFs)[first_idx])
+    } else {
+      character()
+    }
     # remove stop codon from uORFs
     alluORFs <- alluORFs %>% split(., names(.))
     stopifnot(is(alluORFs, "GRangesList"))
@@ -641,6 +742,27 @@ load_annotation <- function(
   
   exonsgrl <- exonsgrl[orf_transcripts]
   trspacecds <- get_trspace_cds(cdsgrl, exonsgrl)
+  #
+  # ── Per-uORF overlap annotation ──────────────────────────────────────────
+  # For every uORF, check whether it overlaps any annotated main CDS in
+  # genomic space and, if so, record:
+  #   overlaps_cds   logical
+  #   overlap_cds_id character - id of the overlapped CDS (comma-separated
+  #                  if more than one); NA otherwise
+  #   overlap_frame  integer   - phase of the uORF start relative to the
+  #                  first overlapped CDS's reading frame, in {0,1,2};
+  #                  NA for non-overlapping uORFs
+  #   out_of_phase   logical   - overlap_frame != 0 (i.e. the uORF reads a
+  #                  different frame of the CDS it overlaps)
+  trspacecds <- .annotate_uorf_overlaps(trspacecds, cdsgrl, is_uORF)
+  # Attach the start codon used for each uORF (NA for annotated CDS).
+  sc_vec <- rep(NA_character_, length(trspacecds))
+  names(sc_vec) <- names(trspacecds)
+  if (add_uorfs && length(uorf_start_codon_lookup) > 0L) {
+    hit <- names(sc_vec) %in% names(uorf_start_codon_lookup)
+    sc_vec[hit] <- uorf_start_codon_lookup[names(sc_vec)[hit]]
+  }
+  S4Vectors::mcols(trspacecds)$start_codon <- sc_vec
   #
   cdsstarts <- trspacecds %>%
     GenomicRanges::start() %>%
