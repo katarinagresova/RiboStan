@@ -41,20 +41,30 @@ find_uorfs <- function(fiveUTRs, fa,
                        longestORF    = FALSE,
                        minimumLength = 0L,
                        cds           = NULL) {
+  .log_msg <- function(msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    message(str_interp("[${ts}] [find_uorfs] ${msg}"))
+  }
+  .log_msg(str_interp("starting uORF search: ${length(fiveUTRs)} transcripts, start=${paste(startCodon,',')}, stop=${paste(stopCodons,',')}, minLen=${minimumLength}, longest=${longestORF}"))
 
   ## 1. Build search space ------------------------------------------------
+  .log_msg("building search space from 5' UTRs")
   search_space <- fiveUTRs
   if (!is.null(cds) && length(cds) > 0L) {
+    .log_msg("extending search space with CDS regions")
     search_space <- .append_cds_to_utrs(fiveUTRs, cds)
   }
+  .log_msg(str_interp("search space: ${length(search_space)} transcripts"))
 
   ## 2. Extract transcript sequences ---------------------------------------
+  .log_msg("extracting transcript sequences from FASTA")
   fa_file <- if (is.character(fa)) Rsamtools::FaFile(fa) else fa
   seqs <- toupper(as.character(
     GenomicFeatures::extractTranscriptSeqs(fa_file, search_space)
   ))
 
   ## 3. Find ORFs in transcript coordinates (via C++) ----------------------
+  .log_msg("scanning sequences for ORFs (C++)")
   start_codons <- toupper(as.character(startCodon))
   raw <- find_orfs_cpp(
     seqs         = seqs,
@@ -62,11 +72,16 @@ find_uorfs <- function(fiveUTRs, fa,
     stop_codons  = toupper(stopCodons),
     min_body     = as.integer(minimumLength)
   )
+  .log_msg(str_interp("found ${length(raw$starts)} raw ORFs"))
 
-  if (length(raw$starts) == 0L) return(GenomicRanges::GRangesList())
+  if (length(raw$starts) == 0L) {
+    .log_msg("no ORFs found, returning empty GRangesList")
+    return(GenomicRanges::GRangesList())
+  }
 
   # Optionally retain only the longest ORF per (sequence, stop-site) pair
   if (isTRUE(longestORF)) {
+    .log_msg("filtering to keep only longest ORF per stop site")
     widths  <- raw$ends - raw$starts
     key     <- paste0(raw$indices, "_", raw$ends)
     keep    <- unlist(
@@ -74,11 +89,13 @@ find_uorfs <- function(fiveUTRs, fa,
       use.names = FALSE
     )
     raw <- lapply(raw, `[`, keep)
+    .log_msg(str_interp("retained ${length(raw$starts)} ORFs after longestORF filtering"))
   }
 
   start_codon_hit <- start_codons[raw$start_codon_idx]
 
   ## 4. Map to genomic coordinates -----------------------------------------
+  .log_msg("mapping ORFs from transcript to genomic coordinates")
   # tx_idx: which element of search_space each ORF belongs to (1-based)
   tx_idx     <- raw$indices
   all_orf_ir <- IRanges::IRanges(start = raw$starts, end = raw$ends)
@@ -94,8 +111,10 @@ find_uorfs <- function(fiveUTRs, fa,
   )
   genomic_grl <- GenomicFeatures::pmapFromTranscripts(orf_gr,
                                                        search_space[tx_idx])
+  .log_msg(str_interp("mapped ${length(genomic_grl)} ORFs to genome"))
 
   ## 5. Name ORFs: <txname>_<rank> -----------------------------------------
+  .log_msg("assigning ORF names and start codon metadata")
   # Sequential rank within each transcript
   tx_names_rep <- names(search_space)[tx_idx]
   rank         <- unlist(
@@ -114,9 +133,13 @@ find_uorfs <- function(fiveUTRs, fa,
 
   ## 6. Filter ORFs that are exact duplicates of annotated CDS -------------
   if (!is.null(cds) && length(genomic_grl) > 0L) {
+    .log_msg("filtering out ORFs that duplicate annotated CDS")
+    n_before <- length(genomic_grl)
     genomic_grl <- .filter_uorfs(genomic_grl, cds)
+    .log_msg(str_interp("removed ${n_before - length(genomic_grl)} duplicate ORFs"))
   }
 
+  .log_msg(str_interp("uORF search complete: ${length(genomic_grl)} final uORFs"))
   genomic_grl
 }
 
