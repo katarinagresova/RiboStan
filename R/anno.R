@@ -614,11 +614,13 @@ convert_gtf <- function(anno, keep_cols){
 load_annotation <- function(
     gtf, fafile, add_uorfs = TRUE,
     ignore_orf_validity = FALSE,
-    keep_cols = 
+    keep_cols =
       c("gene_id", "transcript_id", "gene_name", "type"),
     DEFAULT_CIRC_SEQS=NULL,
     findUORFs_args = c(minimumLength=0, longestORF = FALSE)
     ) {
+  message("[load_annotation] starting annotation loading")
+  message(str_interp("[load_annotation] GTF: ${gtf}, Fasta: ${fafile}, add_uorfs: ${add_uorfs}"))
   if(is.null(DEFAULT_CIRC_SEQS)){
     DEFAULT_CIRC_SEQS <- unique(
       c("chrM","MT","MtDNA","mit","Mito","mitochondrion",
@@ -626,7 +628,9 @@ load_annotation <- function(
       "Chloro","2micron","2-micron","2uM",
       "Mt", "NC_001879.2", "NC_006581.1","ChrM","mitochondrion_genome"))
   }
+  message("[load_annotation] importing GTF file")
   anno <- rtracklayer::import(gtf)
+  message(str_interp("[load_annotation] imported ${length(anno)} features from GTF"))
   ancols <- colnames(mcols(anno))
   is_compressedgtf <- ('Parent'%in% ancols)&(!'transcript_id'%in%ancols)
   if(is_compressedgtf){
@@ -639,8 +643,11 @@ load_annotation <- function(
   stopifnot(all(keep_cols %in% colnames(mcols(anno))))
 
   anno <- anno[, keep_cols]
+  message("[load_annotation] filtering to keep_cols")
   stopifnot(file.exists(fafile))
+  message("[load_annotation] opening fasta file")
   fafileob <- Rsamtools::FaFile(fafile)
+  message("[load_annotation] indexing fasta file")
   Rsamtools::indexFa(fafile)
   tokeep <- seqlevels(anno)%>%intersect(seqlevels(seqinfo(fafileob)))
   stopifnot(length(seqlevels(seqinfo(fafileob)))>0)
@@ -666,12 +673,16 @@ load_annotation <- function(
     filter(!is.na(.data$transcript_id))
   trgiddf$orf_id <- trgiddf$transcript_id
   # get the cds not including stop codons, possibly filtering for valid orfs
+  message("[load_annotation] extracting CDS ranges")
   cdsgrl <- get_cdsgrl(anno, fafileob, ignore_orf_validity)
+  message(str_interp("[load_annotation] extracted ${length(cdsgrl)} CDS transcripts"))
   #add uORFs
   if (add_uorfs) {
     message("adding uORFs..")
+    message("[load_annotation] building TxDb from annotation")
     anno$phase <- NULL
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
+    message("[load_annotation] extracting 5' UTRs")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
     fiveutrs <- fiveutrs[validutrs]
@@ -680,6 +691,7 @@ load_annotation <- function(
       fa = fafile,
       cds = cdsgrl[validutrs]
     )))
+    message(str_interp("[load_annotation] found ${length(alluORFs)} uORFs"))
     alluORFs <- alluORFs %>%
       {
         .@unlistData@ranges@NAMES <- NULL
@@ -742,6 +754,7 @@ load_annotation <- function(
   
   exonsgrl <- exonsgrl[orf_transcripts]
   trspacecds <- get_trspace_cds(cdsgrl, exonsgrl)
+  message(str_interp("[load_annotation] mapped ${length(trspacecds)} CDS to transcript space"))
   #
   # ── Per-uORF overlap annotation ──────────────────────────────────────────
   # For every uORF, check whether it overlaps any annotated main CDS in
@@ -777,6 +790,7 @@ load_annotation <- function(
     dplyr::slice(1) %>%
     .$transcript_id
   #
+  message("[load_annotation] building final annotation object")
   outanno <- list(
     trspacecds = trspacecds,
     cdsgrl = cdsgrl,
@@ -795,6 +809,7 @@ load_annotation <- function(
         setNames(names(outanno$trspacecds))
     )
   )
+  message("[load_annotation] annotation loading complete")
   return(outanno)
 }
 
