@@ -700,7 +700,7 @@ load_annotation <- function(
     }
     .log_msg("  - calling makeTxDbFromGRanges (this may take a moment)")
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
-    n_tx <- length(unique(txdb$transcripts$tx_name))
+    n_tx <- length(GenomicFeatures::transcripts(txdb))
     .log_msg(str_interp("  - TxDb created with ${n_tx} transcripts"))
     .log_msg("extracting 5' UTRs from TxDb")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
