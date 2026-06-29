@@ -688,6 +688,10 @@ load_annotation <- function(
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
     message("[load_annotation] extracting 5' UTRs")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
+    # Ensure exon_rank is numeric in the resulting GRangesList (required by downstream functions)
+    if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
+      mcols(fiveutrs)$exon_rank <- as.numeric(as.character(mcols(fiveutrs)$exon_rank))
+    }
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
     fiveutrs <- fiveutrs[validutrs]
     alluORFs <- do.call(what=find_uorfs, args = c(findUORFs_args,list(
