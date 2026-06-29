@@ -413,6 +413,10 @@ get_trspace_cds <- function(cdsgrl, exonsgrl) {
 
 # TODO update this for uORFs
 get_cdsgrl <- function(filt_anno, fafileob, ignore_orf_validity) {
+  .log_msg <- function(msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    message(str_interp("[${ts}] [get_cdsgrl] ${msg}"))
+  }
   # find which cds are multiples of 3bp
   #
   cdsgrl <- filt_anno %>%
@@ -426,7 +430,7 @@ get_cdsgrl <- function(filt_anno, fafileob, ignore_orf_validity) {
     `==`(0)
 
   cdsgrl <- cdsgrl[is3bp]
-  message(str_interp(paste0(
+  .log_msg(str_interp(paste0(
     "filtered out ${sum(!is3bp)} ORFs for not being",
     " multiples of 3bp long"
   )))
@@ -476,14 +480,14 @@ get_cdsgrl <- function(filt_anno, fafileob, ignore_orf_validity) {
   hasstop <- endseq == "*"
   if (!ignore_orf_validity) {
     cdsgrl <- cdsgrl[hasstop]
-    message(str_interp("filtered out ${sum(!hasstop)} ORFs not ending with *"))
+    .log_msg(str_interp("filtered out ${sum(!hasstop)} ORFs not ending with *"))
   }
   hasM <- hasMstart(cdsgrl, fafileob)
   if (!ignore_orf_validity) {
     cdsgrl <- cdsgrl[hasM]
-    message(str_interp("filtered out ${sum(!hasM)} ORFs not starting with M"))
+    .log_msg(str_interp("filtered out ${sum(!hasM)} ORFs not starting with M"))
   }
-  message(str_interp("${length(cdsgrl)} ORFs left"))
+  .log_msg(str_interp("${length(cdsgrl)} ORFs left"))
   cdsgrl
 }
 
@@ -619,8 +623,12 @@ load_annotation <- function(
     DEFAULT_CIRC_SEQS=NULL,
     findUORFs_args = c(minimumLength=0, longestORF = FALSE)
     ) {
-  message("[load_annotation] starting annotation loading")
-  message(str_interp("[load_annotation] GTF: ${gtf}, Fasta: ${fafile}, add_uorfs: ${add_uorfs}"))
+  .log_msg <- function(msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    message(str_interp("[${ts}] [load_annotation] ${msg}"))
+  }
+  .log_msg("starting annotation loading")
+  .log_msg(str_interp("GTF: ${gtf}, Fasta: ${fafile}, add_uorfs: ${add_uorfs}"))
   if(is.null(DEFAULT_CIRC_SEQS)){
     DEFAULT_CIRC_SEQS <- unique(
       c("chrM","MT","MtDNA","mit","Mito","mitochondrion",
@@ -628,13 +636,13 @@ load_annotation <- function(
       "Chloro","2micron","2-micron","2uM",
       "Mt", "NC_001879.2", "NC_006581.1","ChrM","mitochondrion_genome"))
   }
-  message("[load_annotation] importing GTF file")
+  .log_msg("importing GTF file")
   anno <- rtracklayer::import(gtf)
-  message(str_interp("[load_annotation] imported ${length(anno)} features from GTF"))
+  .log_msg(str_interp("imported ${length(anno)} features from GTF"))
   ancols <- colnames(mcols(anno))
   is_compressedgtf <- ('Parent'%in% ancols)&(!'transcript_id'%in%ancols)
   if(is_compressedgtf){
-    message('reformatting gtf to include transcript_id etc in mcols')
+    .log_msg("reformatting gtf to include transcript_id etc in mcols")
     anno <- convert_gtf(anno, keep_cols)
   }
   stopifnot(length(anno)>0)
@@ -643,11 +651,11 @@ load_annotation <- function(
   stopifnot(all(keep_cols %in% colnames(mcols(anno))))
 
   anno <- anno[, keep_cols]
-  message("[load_annotation] filtering to keep_cols")
+  .log_msg("filtering to keep_cols")
   stopifnot(file.exists(fafile))
-  message("[load_annotation] opening fasta file")
+  .log_msg("opening fasta file")
   fafileob <- Rsamtools::FaFile(fafile)
-  message("[load_annotation] indexing fasta file")
+  .log_msg("indexing fasta file")
   Rsamtools::indexFa(fafile)
   tokeep <- seqlevels(anno)%>%intersect(seqlevels(seqinfo(fafileob)))
   stopifnot(length(seqlevels(seqinfo(fafileob)))>0)
@@ -655,11 +663,11 @@ load_annotation <- function(
   stopifnot(length(tokeep)>0)
   toremove <- seqlevels(anno)%>%setdiff(seqlevels(seqinfo(fafileob)))
   nonempty <- intersect(toremove,seqnames(anno))
-  message(str_interp(paste0('removing ${length(nonempty)} non empty seqlevels',
+  .log_msg(str_interp(paste0('removing ${length(nonempty)} non empty seqlevels',
     ' that are absent from the fasta')))
   anno <- anno %>% GenomeInfoDb::dropSeqlevels(nonempty,pruning.mode='coarse')
   empty <- setdiff(toremove,seqnames(anno))
-  message(str_interp(paste0('removing ${length(empty)} non empty seqlevels',
+  .log_msg(str_interp(paste0('removing ${length(empty)} non empty seqlevels',
     ' that are absent from the fasta')))
   anno <- anno %>% GenomeInfoDb::dropSeqlevels(empty,pruning.mode='coarse')
   seqinfo(anno) <- seqinfo(fafileob)[as.vector(seqlevels(anno))]
@@ -673,20 +681,20 @@ load_annotation <- function(
     filter(!is.na(.data$transcript_id))
   trgiddf$orf_id <- trgiddf$transcript_id
   # get the cds not including stop codons, possibly filtering for valid orfs
-  message("[load_annotation] extracting CDS ranges")
+  .log_msg("extracting CDS ranges")
   cdsgrl <- get_cdsgrl(anno, fafileob, ignore_orf_validity)
-  message(str_interp("[load_annotation] extracted ${length(cdsgrl)} CDS transcripts"))
+  .log_msg(str_interp("extracted ${length(cdsgrl)} CDS transcripts"))
   #add uORFs
   if (add_uorfs) {
-    message("adding uORFs..")
-    message("[load_annotation] building TxDb from annotation")
+    .log_msg("adding uORFs..")
+    .log_msg("building TxDb from annotation")
     anno$phase <- NULL
     # Ensure exon_rank is numeric if present (required by makeTxDbFromGRanges)
     if ("exon_rank" %in% colnames(mcols(anno))) {
       mcols(anno)$exon_rank <- as.numeric(as.character(mcols(anno)$exon_rank))
     }
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
-    message("[load_annotation] extracting 5' UTRs")
+    .log_msg("extracting 5' UTRs")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
     # Ensure exon_rank is numeric in the resulting GRangesList (required by downstream functions)
     if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
@@ -699,7 +707,7 @@ load_annotation <- function(
       fa = fafile,
       cds = cdsgrl[validutrs]
     )))
-    message(str_interp("[load_annotation] found ${length(alluORFs)} uORFs"))
+    .log_msg(str_interp("found ${length(alluORFs)} uORFs"))
     alluORFs <- alluORFs %>%
       {
         .@unlistData@ranges@NAMES <- NULL
@@ -740,7 +748,7 @@ load_annotation <- function(
     trgiddf$uORF <- trgiddf$transcript_id %in% names(alluORFs)
     is_uORF <- names(cdsgrl) %in% names(alluORFs)
     names(is_uORF) <- names(cdsgrl)
-    message("uORFs found")
+    .log_msg("uORFs found")
   } else {
     is_uORF <- rep(FALSE, length(cdsgrl))
   }
@@ -762,7 +770,7 @@ load_annotation <- function(
   
   exonsgrl <- exonsgrl[orf_transcripts]
   trspacecds <- get_trspace_cds(cdsgrl, exonsgrl)
-  message(str_interp("[load_annotation] mapped ${length(trspacecds)} CDS to transcript space"))
+  .log_msg(str_interp("mapped ${length(trspacecds)} CDS to transcript space"))
   #
   # ── Per-uORF overlap annotation ──────────────────────────────────────────
   # For every uORF, check whether it overlaps any annotated main CDS in
@@ -798,7 +806,7 @@ load_annotation <- function(
     dplyr::slice(1) %>%
     .$transcript_id
   #
-  message("[load_annotation] building final annotation object")
+  .log_msg("building final annotation object")
   outanno <- list(
     trspacecds = trspacecds,
     cdsgrl = cdsgrl,
@@ -817,7 +825,7 @@ load_annotation <- function(
         setNames(names(outanno$trspacecds))
     )
   )
-  message("[load_annotation] annotation loading complete")
+  .log_msg("annotation loading complete")
   return(outanno)
 }
 
@@ -878,6 +886,10 @@ subset_annotation <- function(anno, orfs) {
 #' fafile <- "chr22.fa"
 #' ext_fasta <- make_ext_fasta(gtf, fafile, outfasta = "tmp.fa", fpext = 50, tpext = 50)
 make_ext_fasta <- function(gtf, fasta, outfasta, fpext = 50, tpext = 50) {
+  .log_msg <- function(msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    message(str_interp("[${ts}] [make_ext_fasta] ${msg}"))
+  }
   stopifnot({
     cat("testing", file = outfasta)
     file.remove(outfasta)
@@ -945,7 +957,7 @@ make_ext_fasta <- function(gtf, fasta, outfasta, fpext = 50, tpext = 50) {
   # get the sequences
   isoutofbds <- is_out_of_bounds(expcdsgenspace)
   isoutofbds <- any(is_out_of_bounds(expcdsgenspace))
-  message(str_interp(paste0(
+  .log_msg(str_interp(paste0(
     "Excluded ${sum(isoutofbds)} orfs because they",
     " extended beyond chromosomal boundaries"
   )))
@@ -982,7 +994,7 @@ make_ext_fasta <- function(gtf, fasta, outfasta, fpext = 50, tpext = 50) {
   as.data.frame(unlist(cds_exptrspc)) %>%
     select('seqnames', 'start', 'end') %>%
     write_tsv(trcdscoordsfile)
-  message(normalizePath(trcdscoordsfile, mustWork = TRUE))
+  .log_msg(str_interp("wrote transcript CDS coords to: ${normalizePath(trcdscoordsfile, mustWork = TRUE)}"))
 
   # also write our cds coordinates to disk in the new trspace
   nms_cds_exptrspc <- as.character(seqnames(cds_exptrspc))
@@ -1005,13 +1017,13 @@ make_ext_fasta <- function(gtf, fasta, outfasta, fpext = 50, tpext = 50) {
 
   # write the expanded cds exon sequences to disk
   Biostrings::writeXStringSet(expcdsgenspaceseq, outfasta)
-  message(normalizePath(outfasta, mustWork = TRUE))
+  .log_msg(str_interp("wrote expanded CDS fasta to: ${normalizePath(outfasta, mustWork = TRUE)}"))
 
   # now make fasta file with shorter transcript names
   shortheaderfasta <- paste0(outprefix, ".shortheader.fa")
   names(expcdsgenspaceseq) <- str_extract(names(expcdsgenspaceseq), '[^|]+')
   Biostrings::writeXStringSet(expcdsgenspaceseq, shortheaderfasta)
-  message(normalizePath(shortheaderfasta, mustWork = TRUE))
+  .log_msg(str_interp("wrote short-header fasta to: ${normalizePath(shortheaderfasta, mustWork = TRUE)}"))
   return(outfasta)
 }
 
