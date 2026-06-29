@@ -681,6 +681,10 @@ load_annotation <- function(
     message("adding uORFs..")
     message("[load_annotation] building TxDb from annotation")
     anno$phase <- NULL
+    # Ensure exon_rank is numeric if present (required by makeTxDbFromGRanges)
+    if ("exon_rank" %in% colnames(mcols(anno))) {
+      mcols(anno)$exon_rank <- as.numeric(as.character(mcols(anno)$exon_rank))
+    }
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
     message("[load_annotation] extracting 5' UTRs")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
