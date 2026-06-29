@@ -688,32 +688,46 @@ load_annotation <- function(
   if (add_uorfs) {
     .log_msg("adding uORFs..")
     .log_msg("building TxDb from annotation")
+    .log_msg("  - removing phase column from annotation")
     anno$phase <- NULL
     # Ensure exon_rank is numeric if present (required by makeTxDbFromGRanges)
+    .log_msg("  - checking and converting exon_rank to numeric if present")
     if ("exon_rank" %in% colnames(mcols(anno))) {
+      .log_msg("    found exon_rank column, converting to numeric")
       mcols(anno)$exon_rank <- as.numeric(as.character(mcols(anno)$exon_rank))
+    } else {
+      .log_msg("    no exon_rank column found in annotation")
     }
+    .log_msg("  - calling makeTxDbFromGRanges (this may take a moment)")
     txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
-    .log_msg("extracting 5' UTRs")
+    .log_msg(str_interp("  - TxDb created with ${length(unique(txdb$transcripts$tx_name)))} transcripts"))
+    .log_msg("extracting 5' UTRs from TxDb")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
+    .log_msg(str_interp("  - extracted 5' UTRs for ${length(fiveutrs)} transcripts"))
     # Ensure exon_rank is numeric in the resulting GRangesList (required by downstream functions)
     if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
+      .log_msg("  - converting 5' UTR exon_rank to numeric")
       mcols(fiveutrs)$exon_rank <- as.numeric(as.character(mcols(fiveutrs)$exon_rank))
     }
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
+    .log_msg(str_interp("  - ${length(validutrs)} transcripts have both CDS and 5' UTR (out of ${length(fiveutrs)} total 5' UTRs)"))
     fiveutrs <- fiveutrs[validutrs]
+    .log_msg(str_interp("calling find_uorfs on ${length(fiveutrs)} transcripts with 5' UTRs (this may take a while)"))
+    .log_msg("  - parameters: minimumLength=#{findUORFs_args$minimumLength}, longestORF=#{findUORFs_args$longestORF}")
     alluORFs <- do.call(what=find_uorfs, args = c(findUORFs_args,list(
       fiveUTRs = fiveutrs,
       fa = fafile,
       cds = cdsgrl[validutrs]
     )))
-    .log_msg(str_interp("found ${length(alluORFs)} uORFs"))
+    .log_msg(str_interp("found ${length(alluORFs)} uORF-containing transcripts"))
+    .log_msg("  - processing uORF metadata and removing stop codons")
     alluORFs <- alluORFs %>%
       {
         .@unlistData@ranges@NAMES <- NULL
         .
       } %>%
       unlist()
+    .log_msg(str_interp("  - expanded to ${length(alluORFs)} individual uORF ranges"))
     alluORFs$transcript_id <- names(alluORFs) %>% str_replace("_\\d+$", "")
     alluORFs$type <- "CDS"
     alluORFs$gene_id <- trgiddf$gene_id[
@@ -728,13 +742,16 @@ load_annotation <- function(
       character()
     }
     # remove stop codon from uORFs
+    .log_msg("  - removing stop codons from uORFs")
     alluORFs <- alluORFs %>% split(., names(.))
     stopifnot(is(alluORFs, "GRangesList"))
     seqinfo(alluORFs) <- seqinfo(anno)
     alluORFs <- alluORFs %>% resize_grl(sum(width(.)) - 3, "start")
     # add uorfs to cdsgrl
+    .log_msg(str_interp("  - merging ${length(alluORFs)} uORFs with existing CDS"))
     cdsgrl <- c(cdsgrl, alluORFs)
     # now modify metadata
+    .log_msg("  - updating ORF metadata table")
     names(cdsgrl@unlistData) <- NULL
     trgiddf <- unlist(cdsgrl) %>%
       {
@@ -748,7 +765,7 @@ load_annotation <- function(
     trgiddf$uORF <- trgiddf$transcript_id %in% names(alluORFs)
     is_uORF <- names(cdsgrl) %in% names(alluORFs)
     names(is_uORF) <- names(cdsgrl)
-    .log_msg("uORFs found")
+    .log_msg(str_interp("uORFs added: ${sum(is_uORF)} uORFs, ${length(cdsgrl) - sum(is_uORF)} annotated CDS"))
   } else {
     is_uORF <- rep(FALSE, length(cdsgrl))
   }
