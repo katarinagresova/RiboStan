@@ -740,7 +740,14 @@ load_annotation <- function(
     seqinfo(alluORFs) <- seqinfo(anno)
     alluORFs <- alluORFs %>% sort_grl_st()
     # compute width per transcript (each uORF transcript gets its own total width - 3)
-    uorf_widths <- elementNROWS(alluORFs) - 3
+    uorf_widths <- sum(width(alluORFs)) - 3
+    # filter out any uORFs that would have non-positive width after stop removal
+    valid_uorfs <- uorf_widths > 0
+    if (!all(valid_uorfs)) {
+      .log_msg(str_interp("  - filtering out ${sum(!valid_uorfs)} uORFs with width <= 3"))
+      alluORFs <- alluORFs[valid_uorfs]
+      uorf_widths <- uorf_widths[valid_uorfs]
+    }
     alluORFs <- resize_grl(alluORFs, uorf_widths, "start")
     # add uorfs to cdsgrl
     .log_msg(str_interp("  - merging ${length(alluORFs)} uORFs with existing CDS"))
