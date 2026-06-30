@@ -287,13 +287,12 @@ hasMstart <- function(cdsgrl, fafileob) {
 get_trspace_cds <- function(cdsgrl, exonsgrl) {
   # now lift cds to exons space
   # nouorf <- cdsgrl%>%names%>%str_detect('_')%>%`!`
+  # Convert to SimpleList to avoid CompressedGRangesList size limits
+  exon_subset <- as(exonsgrl[fmcols(., transcript_id)], "SimpleList")
   trspacecds <-
     cdsgrl %>%
     # cdsgrl[nouorf]%>%
-    GenomicFeatures::pmapToTranscripts(
-      exonsgrl[fmcols(., transcript_id)]
-      # exonsgrl['ENST00000000442.11']
-    )
+    GenomicFeatures::pmapToTranscripts(exon_subset)
   stopifnot(all(elementNROWS(trspacecds) == 1))
   trspacecds <- unlist(trspacecds)
   strand(trspacecds) <- "+"
