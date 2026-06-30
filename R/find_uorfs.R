@@ -54,6 +54,12 @@ find_uorfs <- function(fiveUTRs, fa,
     .log_msg("extending search space with CDS regions")
     search_space <- .append_cds_to_utrs(fiveUTRs, cds)
   }
+  # Ensure exon_rank is numeric (required by extractTranscriptSeqs)
+  if ("exon_rank" %in% colnames(mcols(search_space@unlistData))) {
+    mcols(search_space@unlistData)$exon_rank <- as.numeric(as.character(
+      mcols(search_space@unlistData)$exon_rank
+    ))
+  }
   .log_msg(str_interp("search space: ${length(search_space)} transcripts"))
 
   ## 2. Extract transcript sequences ---------------------------------------

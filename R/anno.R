@@ -705,32 +705,20 @@ load_annotation <- function(
     .log_msg("extracting 5' UTRs from TxDb")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
     .log_msg(str_interp("  - extracted 5' UTRs for ${length(fiveutrs)} transcripts"))
-    # Ensure exon_rank is numeric in the resulting GRangesList (required by downstream functions)
+    # fiveUTRsByTranscript returns exon_rank as character in inner metadata; convert immediately
+    if ("exon_rank" %in% colnames(mcols(fiveutrs@unlistData))) {
+      mcols(fiveutrs@unlistData)$exon_rank <- as.numeric(as.character(
+        mcols(fiveutrs@unlistData)$exon_rank
+      ))
+      .log_msg("  - converted inner exon_rank to numeric")
+    }
     if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
-      .log_msg("  - converting 5' UTR exon_rank to numeric")
       mcols(fiveutrs)$exon_rank <- as.numeric(as.character(mcols(fiveutrs)$exon_rank))
+      .log_msg("  - converted outer exon_rank to numeric")
     }
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
     .log_msg(str_interp("  - ${length(validutrs)} transcripts have both CDS and 5' UTR (out of ${length(fiveutrs)} total 5' UTRs)"))
     fiveutrs <- fiveutrs[validutrs]
-    # Re-check exon_rank after subsetting (subsetting can sometimes reset types)
-    # Also check inner metadata (unlistData) which is what GenomicFeatures uses internally
-    if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
-      is_numeric <- is.numeric(mcols(fiveutrs)$exon_rank)
-      .log_msg(str_interp("  - checking outer exon_rank type after subset: is_numeric=${is_numeric}"))
-      if (!is_numeric) {
-        .log_msg("  - re-converting outer exon_rank to numeric after subset")
-        mcols(fiveutrs)$exon_rank <- as.numeric(as.character(mcols(fiveutrs)$exon_rank))
-      }
-    }
-    if ("exon_rank" %in% colnames(mcols(fiveutrs@unlistData))) {
-      is_numeric_inner <- is.numeric(mcols(fiveutrs@unlistData)$exon_rank)
-      .log_msg(str_interp("  - checking inner exon_rank type after subset: is_numeric=${is_numeric_inner}"))
-      if (!is_numeric_inner) {
-        .log_msg("  - re-converting inner exon_rank to numeric after subset")
-        mcols(fiveutrs@unlistData)$exon_rank <- as.numeric(as.character(mcols(fiveutrs@unlistData)$exon_rank))
-      }
-    }
     .log_msg(str_interp("calling find_uorfs on ${length(fiveutrs)} transcripts with 5' UTRs (this may take a while)"))
     .log_msg("  - parameters: minimumLength=#{findUORFs_args$minimumLength}, longestORF=#{findUORFs_args$longestORF}")
     alluORFs <- do.call(what=find_uorfs, args = c(findUORFs_args,list(
