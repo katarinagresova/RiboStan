@@ -738,7 +738,10 @@ load_annotation <- function(
     alluORFs <- alluORFs %>% split(., names(.))
     stopifnot(is(alluORFs, "GRangesList"))
     seqinfo(alluORFs) <- seqinfo(anno)
-    alluORFs <- alluORFs %>% sort_grl_st() %>% resize_grl(sum(width(.)) - 3, "start")
+    alluORFs <- alluORFs %>% sort_grl_st()
+    # compute width per transcript (each uORF transcript gets its own total width - 3)
+    uorf_widths <- elementNROWS(alluORFs) - 3
+    alluORFs <- resize_grl(alluORFs, uorf_widths, "start")
     # add uorfs to cdsgrl
     .log_msg(str_interp("  - merging ${length(alluORFs)} uORFs with existing CDS"))
     cdsgrl <- c(cdsgrl, alluORFs)
