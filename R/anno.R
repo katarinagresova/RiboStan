@@ -288,7 +288,7 @@ get_trspace_cds <- function(cdsgrl, exonsgrl) {
   # now lift cds to exons space
   # nouorf <- cdsgrl%>%names%>%str_detect('_')%>%`!`
   # Convert to SimpleList to avoid CompressedGRangesList size limits
-  exon_subset <- as(exonsgrl[fmcols(., transcript_id)], "SimpleList")
+  exon_subset <- as(exonsgrl[fmcols(cdsgrl, transcript_id)], "SimpleList")
   trspacecds <-
     cdsgrl %>%
     # cdsgrl[nouorf]%>%
