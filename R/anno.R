@@ -739,7 +739,7 @@ load_annotation <- function(
     alluORFs <- alluORFs %>% split(., names(.))
     stopifnot(is(alluORFs, "GRangesList"))
     seqinfo(alluORFs) <- seqinfo(anno)
-    alluORFs <- alluORFs %>% resize_grl(sum(width(.)) - 3, "start")
+    alluORFs <- alluORFs %>% sort_grl_st() %>% resize_grl(sum(width(.)) - 3, "start")
     # add uorfs to cdsgrl
     .log_msg(str_interp("  - merging ${length(alluORFs)} uORFs with existing CDS"))
     cdsgrl <- c(cdsgrl, alluORFs)
