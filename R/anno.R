@@ -690,32 +690,18 @@ load_annotation <- function(
     .log_msg("building TxDb from annotation")
     .log_msg("  - removing phase column from annotation")
     anno$phase <- NULL
-    # Ensure exon_rank is numeric if present (required by makeTxDbFromGRanges)
-    .log_msg("  - checking and converting exon_rank to numeric if present")
+    # Remove exon_rank if present (can cause NA errors in makeTxDbFromGRanges)
     if ("exon_rank" %in% colnames(mcols(anno))) {
-      .log_msg("    found exon_rank column, converting to numeric")
-      mcols(anno)$exon_rank <- as.numeric(as.character(mcols(anno)$exon_rank))
-    } else {
-      .log_msg("    no exon_rank column found in annotation")
+      .log_msg("    removing exon_rank column to avoid NA issues")
+      mcols(anno)$exon_rank <- NULL
     }
-    .log_msg("  - calling makeTxDbFromGRanges (this may take a moment)")
-    txdb <- GenomicFeatures::makeTxDbFromGRanges(anno)
+    .log_msg("  - calling txdbmaker::makeTxDbFromGRanges (this may take a moment)")
+    txdb <- txdbmaker::makeTxDbFromGRanges(anno)
     n_tx <- length(GenomicFeatures::transcripts(txdb))
     .log_msg(str_interp("  - TxDb created with ${n_tx} transcripts"))
     .log_msg("extracting 5' UTRs from TxDb")
     fiveutrs <- GenomicFeatures::fiveUTRsByTranscript(txdb, use.names = TRUE)
     .log_msg(str_interp("  - extracted 5' UTRs for ${length(fiveutrs)} transcripts"))
-    # fiveUTRsByTranscript returns exon_rank as character in inner metadata; convert immediately
-    if ("exon_rank" %in% colnames(mcols(fiveutrs@unlistData))) {
-      mcols(fiveutrs@unlistData)$exon_rank <- as.numeric(as.character(
-        mcols(fiveutrs@unlistData)$exon_rank
-      ))
-      .log_msg("  - converted inner exon_rank to numeric")
-    }
-    if ("exon_rank" %in% colnames(mcols(fiveutrs))) {
-      mcols(fiveutrs)$exon_rank <- as.numeric(as.character(mcols(fiveutrs)$exon_rank))
-      .log_msg("  - converted outer exon_rank to numeric")
-    }
     validutrs <- names(fiveutrs)%>%intersect(names(cdsgrl))
     .log_msg(str_interp("  - ${length(validutrs)} transcripts have both CDS and 5' UTR (out of ${length(fiveutrs)} total 5' UTRs)"))
     fiveutrs <- fiveutrs[validutrs]
