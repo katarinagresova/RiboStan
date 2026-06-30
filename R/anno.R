@@ -763,13 +763,19 @@ load_annotation <- function(
     is_uORF <- rep(FALSE, length(cdsgrl))
   }
   #
+  .log_msg("building final annotation structure")
   orf_transcripts <- fmcols(cdsgrl, transcript_id)
+  .log_msg(str_interp("  - got ${length(orf_transcripts)} ORF transcript mappings"))
   # subset cds and anno with these
+  .log_msg("  - filtering annotation to keep only relevant transcripts")
   anno <- anno %>%
     subset(type != "CDS") %>%
     subset(transcript_id %in% orf_transcripts)
+  .log_msg(str_interp("  - annotation now has ${length(anno)} features"))
   #
+  .log_msg("  - merging annotation with CDS ranges")
   anno <- c(anno, unlist(cdsgrl))
+  .log_msg("  - extracting and sorting exons by transcript")
   exonsgrl <- anno %>%
     subset(type == "exon") %>%
     sort_grl_st%>%
@@ -777,8 +783,10 @@ load_annotation <- function(
   exon_tr_names <- names(exonsgrl)
   stopifnot(all(orf_transcripts %in% exon_tr_names))
   setdiff(orf_transcripts,exon_tr_names)
-  
+
+  .log_msg(str_interp("  - created exonsgrl with ${length(exonsgrl)} transcripts"))
   exonsgrl <- exonsgrl[orf_transcripts]
+  .log_msg("  - mapping CDS to transcript space")
   trspacecds <- get_trspace_cds(cdsgrl, exonsgrl)
   .log_msg(str_interp("mapped ${length(trspacecds)} CDS to transcript space"))
   #
@@ -793,13 +801,17 @@ load_annotation <- function(
   #                  NA for non-overlapping uORFs
   #   out_of_phase   logical   - overlap_frame != 0 (i.e. the uORF reads a
   #                  different frame of the CDS it overlaps)
+  .log_msg("annotating uORF overlaps with main CDS")
   trspacecds <- .annotate_uorf_overlaps(trspacecds, cdsgrl, is_uORF)
+  .log_msg("uORF overlap annotation complete")
   # Attach the start codon used for each uORF (NA for annotated CDS).
+  .log_msg("attaching start codon metadata to uORFs")
   sc_vec <- rep(NA_character_, length(trspacecds))
   names(sc_vec) <- names(trspacecds)
   if (add_uorfs && length(uorf_start_codon_lookup) > 0L) {
     hit <- names(sc_vec) %in% names(uorf_start_codon_lookup)
     sc_vec[hit] <- uorf_start_codon_lookup[names(sc_vec)[hit]]
+    .log_msg(str_interp("  - assigned start codons to ${sum(hit)} uORFs"))
   }
   S4Vectors::mcols(trspacecds)$start_codon <- sc_vec
   #
