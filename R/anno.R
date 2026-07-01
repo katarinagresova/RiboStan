@@ -333,7 +333,7 @@ get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
     # We need to collapse these into a single range per transcript.
 
     # Reduce each element to a single range (min start to max end)
-    trspace_reduced <- reduce(trspace_batch)
+    trspace_reduced <- GenomicRanges::reduce(trspace_batch)
 
     # Set strand to positive
     strand(trspace_reduced) <- "+"
