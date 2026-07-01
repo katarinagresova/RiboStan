@@ -120,6 +120,13 @@ find_uorfs <- function(fiveUTRs, fa,
   )
   genomic_grl <- GenomicFeatures::pmapFromTranscripts(orf_gr,
                                                        search_space[tx_idx])
+  # pmapFromTranscripts emits one range per exon of the transcript, inserting
+  # zero-width placeholder ranges for exons the ORF does not span. Drop those:
+  # they carry no sequence, but if left in they later map to bogus, out-of-bound
+  # transcript-space ranges (e.g. in get_trspace_cds) and break the
+  # one-contiguous-range-per-ORF invariant. Every ORF spans >= 1 exon with
+  # non-zero width, so no element is emptied.
+  genomic_grl <- genomic_grl[width(genomic_grl) > 0L]
   .log_msg(str_interp("mapped ${length(genomic_grl)} ORFs to genome"))
 
   ## 5. Name ORFs: <txname>_<rank> -----------------------------------------
@@ -224,14 +231,18 @@ find_uorfs <- function(fiveUTRs, fa,
   shared <- intersect(names(fiveUTRs), names(cds))
   if (length(shared) == 0L) return(fiveUTRs)
 
-  # Combine element-wise (equivalent to ORFik::pc)
-  combined <- GenomicRanges::GRangesList(
-    mapply(c, fiveUTRs[shared], cds[shared], SIMPLIFY = FALSE)
-  )
-  names(combined) <- shared
+  # Per transcript, take the reduced union of its 5'UTR and CDS exon ranges.
+  # Done fully vectorized instead of an R-level mapply(c, ...) over every
+  # transcript (the previous approach, equivalent to ORFik::pc, was the
+  # bottleneck on large annotations): unlist both GRangesLists to flat GRanges
+  # once, drop metadata (reduce discards it anyway, and this avoids an mcols
+  # mismatch between UTR/CDS exons), concatenate, then split + reduce in one go.
+  utr <- GenomicRanges::granges(unlist(fiveUTRs[shared], use.names = TRUE))
+  cdr <- GenomicRanges::granges(unlist(cds[shared],      use.names = TRUE))
+  allr <- c(utr, cdr)
+  combined <- GenomicRanges::split(allr, factor(names(allr), levels = shared))
 
   reduced <- GenomicRanges::reduce(combined, ignore.strand = FALSE)
-  names(reduced)   <- shared
   seqinfo(reduced) <- seqinfo(fiveUTRs)
 
   only_utrs <- fiveUTRs[setdiff(names(fiveUTRs), shared)]

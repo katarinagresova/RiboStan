@@ -420,31 +420,24 @@ get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
       first_uorf    <- hit_uorf[first_hit_idx]
       first_cds     <- hit_cds[first_hit_idx]
 
-      # Compute frame: project the uORF's genomic start onto the CDS's
-      # transcript-space coordinates. A uORF in-frame with the CDS has
-      # (uorf_start_in_cds_trspace - cds_start_in_cds_trspace) %% 3 == 0.
-      uorf_starts_gr <- .start_sites_gr(uorf_gen[first_uorf])
-      cds_trs        <- cdsgrl[first_cds]
-      # pmapToTranscripts may return GRanges or GRangesList depending on
-      # input; coerce to GRangesList so indexing/unlist behave uniformly.
-      mapped <- GenomicFeatures::pmapToTranscripts(
-        uorf_starts_gr, cds_trs
-      )
-      if (is(mapped, "GRanges")) {
-        mapped <- GenomicRanges::GRangesList(
-          lapply(seq_along(mapped), function(i) mapped[i])
-        )
-      }
-      # Keep only uORF hits whose start actually maps into the CDS
-      has_map <- S4Vectors::elementNROWS(mapped) > 0L
-      frame_vals <- if (any(has_map)) {
-        mr <- unlist(mapped[has_map], use.names = FALSE)
-        ((GenomicRanges::start(mr) - 1L) %% 3L)
-      } else {
-        integer(0)
-      }
+      # Compute frame directly in the shared transcript coordinate system.
+      # get_trspace_cds expresses every ORF (uORF and main CDS) in full
+      # transcript coordinates, so a uORF and its own CDS are directly
+      # comparable in trspacecds. The reading-frame offset is simply
+      # (uorf_start - cds_start) %% 3, and a uORF that reads the CDS
+      # in-frame has offset 0. This is exact even when the uORF begins in
+      # the 5' UTR upstream of the CDS (negative offset; R's %% still
+      # yields {0,1,2}), unlike mapping the uORF start into CDS-relative
+      # coordinates via pmapToTranscripts, which returned out-of-bound
+      # ranges (frame fixed at 2) for every upstream-starting uORF. Frame
+      # is only defined when the overlapped CDS shares the uORF's
+      # transcript (its own CDS); NA otherwise.
+      ts_start  <- setNames(GenomicRanges::start(trspacecds),
+                            names(trspacecds))
+      same_tx   <- sub("_\\d+$", "", first_uorf) == first_cds
       first_frame <- rep(NA_integer_, length(first_uorf))
-      first_frame[has_map] <- frame_vals
+      first_frame[same_tx] <-
+        (ts_start[first_uorf[same_tx]] - ts_start[first_cds[same_tx]]) %% 3L
 
       # Build per-uORF summary
       by_uorf <- split(hit_cds, hit_uorf)
