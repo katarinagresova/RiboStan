@@ -280,96 +280,112 @@ hasMstart <- function(cdsgrl, fafileob) {
 #' @param cdsgrl GRangesList; List of filtered CDS GRanges from GTF
 #'     annotation
 #' @param exonsgrl GRangesList; exons making up the space element to be mapped
-#'     from
-#' @param batch_size Integer; number of transcripts to process per batch
-#'     (default 5000). Lower values reduce memory usage but may increase runtime.
+#'     from, keyed by transcript_id (one element per transcript)
 #' @return a granges object containing the coding sequence range for each
-#' transcript
+#' ORF (CDS or uORF) in transcript coordinates, named by orf_id
+#'
+#' @details Each ORF is a single contiguous stretch of its transcript, so its
+#' transcript-space range is fully determined by (a) the transcript position of
+#' its 5' base and (b) its total exonic width. We therefore map only the 5'
+#' base of every ORF with one vectorised overlap and compute the range
+#' arithmetically, rather than calling \code{GenomicFeatures::pmapToTranscripts}
+#' per ORF. This is orders of magnitude faster on annotations with millions of
+#' (uORF) entries while producing identical coordinates.
 
-get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
+get_trspace_cds <- function(cdsgrl, exonsgrl) {
   .log_msg <- function(msg) {
     ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
     message(str_interp("[${ts}] [get_trspace_cds] ${msg}"))
   }
 
-  n_transcripts <- length(cdsgrl)
-  .log_msg(str_interp("mapping ${n_transcripts} transcripts to transcript space"))
+  n_orfs <- length(cdsgrl)
+  .log_msg(str_interp("mapping ${n_orfs} ORFs to transcript space"))
 
-  # Get transcript IDs for each CDS entry
-  cds_tx_ids <- fmcols(cdsgrl, transcript_id)
-
-  # Pre-allocate result list
-  results <- vector("list", ceiling(n_transcripts / batch_size))
-  batch_idx <- 0
-
-  # Process in batches to reduce memory pressure
-  for (i in seq(1, n_transcripts, by = batch_size)) {
-    batch_idx <- batch_idx + 1
-    end_i <- min(i + batch_size - 1, n_transcripts)
-    batch_size_actual <- end_i - i + 1
-
-    .log_msg(str_interp("  batch ${batch_idx}: processing transcripts ${i}-${end_i}"))
-
-    # Get indices of exons for current batch transcripts
-    batch_tx_ids <- cds_tx_ids[i:end_i]
-
-    # Directly subset exonsgrl using match for efficiency
-    exon_indices <- match(batch_tx_ids, names(exonsgrl))
-    if (any(is.na(exon_indices))) {
-      missing <- batch_tx_ids[is.na(exon_indices)]
-      stop(str_interp("Missing exons for transcripts: ${paste(missing, collapse=', ')}"))
-    }
-
-    # Extract and convert to SimpleList for this batch only
-    exon_subset <- as(exonsgrl[exon_indices], "SimpleList")
-
-    # Map CDS to transcript space for this batch
-    batch_cds <- cdsgrl[i:end_i]
-    trspace_batch <- GenomicFeatures::pmapToTranscripts(batch_cds, exon_subset)
-
-    # pmapToTranscripts returns a GRangesList where each element contains
-    # the transcript-space mapping for one CDS. For multi-exon CDS, this
-    # can have multiple ranges (one per exon the CDS spans).
-    # We need to collapse these into a single range per transcript.
-
-    # Reduce each element to a single range (min start to max end)
-    trspace_reduced <- GenomicRanges::reduce(trspace_batch)
-
-    # A CDS is contiguous in transcript space, so reduction must yield
-    # exactly one range per transcript. More than one indicates a gap or
-    # mapping problem that should error rather than be silently collapsed.
-    nranges <- elementNROWS(trspace_reduced)
-    if (!all(nranges == 1L)) {
-      bad <- names(trspace_reduced)[nranges != 1L]
-      stop(str_interp(paste0(
-        "CDS did not map to a single contiguous transcript-space range ",
-        "for: ${paste(head(bad), collapse = ', ')}"
-      )))
-    }
-
-    # Collapse the length-1 GRangesList to a GRanges (one range per
-    # transcript) so the result matches the documented return type and
-    # downstream start()/end() yield atomic vectors, not IntegerLists.
-    trspace_reduced <- unlist(trspace_reduced, use.names = TRUE)
-
-    # Set strand to positive
-    strand(trspace_reduced) <- "+"
-
-    # Store result with proper names (names preserved from reduction)
-    results[[batch_idx]] <- trspace_reduced
-
-    # Free memory before next batch
-    rm(exon_subset, trspace_batch, trspace_reduced)
-    if (batch_idx %% 5 == 0) {
-      gc(verbose = FALSE)
-    }
+  # Parent transcript of each ORF; every ORF's transcript must have exons.
+  orf_tx <- fmcols(cdsgrl, transcript_id)
+  if (!all(orf_tx %in% names(exonsgrl))) {
+    missing <- unique(orf_tx[!orf_tx %in% names(exonsgrl)])
+    stop(str_interp(
+      "Missing exons for transcripts: ${paste(head(missing), collapse = ', ')}"
+    ))
   }
 
-  # Combine all batches
-  .log_msg("combining batch results")
-  trspacecds <- do.call(c, results)
+  # Flatten the (unique) transcript exons and, for each exon, record its
+  # cumulative transcript-space offset: the number of transcript nucleotides
+  # 5' of that exon (exons are already sorted 5'->3'). A genomic position p
+  # inside exon e then maps to transcript position
+  #   + strand: offset(e) + (p      - start(e)) + 1
+  #   - strand: offset(e) + (end(e) - p       ) + 1
+  exflat  <- unlist(exonsgrl, use.names = FALSE)
+  n_ex    <- elementNROWS(exonsgrl)
+  ex_w    <- width(exflat)
+  off_all <- cumsum(as.numeric(ex_w)) - ex_w          # nt before exon (global)
+  first_pos <- GenomicRanges::start(exonsgrl@partitioning)  # 1st exon per tx
+  exon_grp  <- rep(seq_along(exonsgrl), n_ex)              # tx index per exon
+  ex_offset <- off_all - off_all[first_pos][exon_grp]      # nt before exon (in tx)
+  ex_start  <- GenomicRanges::start(exflat)
+  ex_end    <- GenomicRanges::end(exflat)
+  ex_strand <- as.character(strand(exflat))
 
-  .log_msg(str_interp("completed mapping ${length(trspacecds)} transcripts"))
+  # 5' base and total width of each ORF (contiguous in transcript space).
+  orf_span   <- unlist(range(cdsgrl), use.names = FALSE)
+  orf_strand <- as.character(strand(orf_span))
+  orf_5p     <- ifelse(orf_strand == "+",
+                       GenomicRanges::start(orf_span),
+                       GenomicRanges::end(orf_span))
+  orf_width  <- sum(width(cdsgrl))
+
+  # Locate each ORF's 5' base within its own transcript's exons. Using the
+  # transcript_id as the seqname confines overlaps to the ORF's own
+  # transcript (different transcripts never share a seqname), so each ORF
+  # yields exactly one hit and there is no genome-wide overlap explosion.
+  hits <- GenomicRanges::findOverlaps(
+    GenomicRanges::GRanges(orf_tx, IRanges::IRanges(orf_5p, width = 1)),
+    GenomicRanges::GRanges(rep(names(exonsgrl), n_ex),
+                           IRanges::IRanges(ex_start, ex_end))
+  )
+  qh <- S4Vectors::queryHits(hits)
+  sh <- S4Vectors::subjectHits(hits)
+  # exons within a transcript don't overlap, so expect one hit per ORF;
+  # guard defensively against duplicates by keeping the first.
+  keep <- !duplicated(qh)
+  qh <- qh[keep]; sh <- sh[keep]
+
+  ts_start <- integer(n_orfs)
+  ts_start[qh] <- ifelse(
+    ex_strand[sh] == "+",
+    ex_offset[sh] + (orf_5p[qh] - ex_start[sh]) + 1L,
+    ex_offset[sh] + (ex_end[sh] - orf_5p[qh]) + 1L
+  )
+  ts_end <- ts_start + orf_width - 1L
+
+  # Every ORF must map (5' base inside an exon) and fit within its
+  # transcript; either failure means the ORF/exon coordinates are
+  # inconsistent (e.g. an out-of-bounds or non-contiguous ORF).
+  tx_len <- sum(width(exonsgrl))[orf_tx]
+  bad <- ts_start < 1L | ts_end > tx_len
+  if (any(bad)) {
+    stop(str_interp(paste0(
+      "${sum(bad)} ORF(s) do not map to a valid transcript-space range, ",
+      "e.g. ${paste(head(names(cdsgrl)[bad]), collapse = ', ')}"
+    )))
+  }
+
+  trspacecds <- GenomicRanges::GRanges(
+    seqnames = orf_tx,
+    ranges   = IRanges::IRanges(ts_start, ts_end),
+    strand   = "+"
+  )
+  names(trspacecds) <- names(cdsgrl)
+  # Record transcript lengths as seqlengths (as pmapToTranscripts did), so
+  # downstream bounds checks see the transcript sizes.
+  si <- GenomeInfoDb::Seqinfo(
+    seqnames   = names(exonsgrl),
+    seqlengths = as.integer(sum(width(exonsgrl)))
+  )
+  seqinfo(trspacecds) <- si[seqlevels(trspacecds)]
+
+  .log_msg(str_interp("completed mapping ${length(trspacecds)} ORFs"))
   trspacecds
 }
 
@@ -861,7 +877,12 @@ load_annotation <- function(
   setdiff(orf_transcripts,exon_tr_names)
 
   .log_msg(str_interp("  - created exonsgrl with ${length(exonsgrl)} transcripts"))
-  exonsgrl <- exonsgrl[orf_transcripts]
+  # NB: keep exonsgrl keyed by unique transcript_id (one element per
+  # transcript). get_trspace_cds looks up each ORF's exons by name, and all
+  # downstream consumers (longtrs, subset_annotation, get_codon_occs) index
+  # exonsgrl by transcript_id too. Expanding it to one element per ORF here
+  # duplicated every transcript's exons ~n_uORFs-fold, making get_trspace_cds
+  # do match()/subset over millions of (duplicated) elements per batch.
   .log_msg("  - mapping CDS to transcript space")
   trspacecds <- get_trspace_cds(cdsgrl, exonsgrl)
   .log_msg(str_interp("mapped ${length(trspacecds)} CDS to transcript space"))
