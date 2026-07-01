@@ -281,21 +281,73 @@ hasMstart <- function(cdsgrl, fafileob) {
 #'     annotation
 #' @param exonsgrl GRangesList; exons making up the space element to be mapped
 #'     from
+#' @param batch_size Integer; number of transcripts to process per batch
+#'     (default 5000). Lower values reduce memory usage but may increase runtime.
 #' @return a granges object containing the coding sequence range for each
 #' transcript
 
-get_trspace_cds <- function(cdsgrl, exonsgrl) {
-  # now lift cds to exons space
-  # nouorf <- cdsgrl%>%names%>%str_detect('_')%>%`!`
-  # Convert to SimpleList to avoid CompressedGRangesList size limits
-  exon_subset <- as(exonsgrl[fmcols(cdsgrl, transcript_id)], "SimpleList")
-  trspacecds <-
-    cdsgrl %>%
-    # cdsgrl[nouorf]%>%
-    GenomicFeatures::pmapToTranscripts(exon_subset)
-  stopifnot(all(elementNROWS(trspacecds) == 1))
-  trspacecds <- unlist(trspacecds)
-  strand(trspacecds) <- "+"
+get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
+  .log_msg <- function(msg) {
+    ts <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    message(str_interp("[${ts}] [get_trspace_cds] ${msg}"))
+  }
+
+  n_transcripts <- length(cdsgrl)
+  .log_msg(str_interp("mapping ${n_transcripts} transcripts to transcript space"))
+
+  # Get transcript IDs for each CDS entry
+  cds_tx_ids <- fmcols(cdsgrl, transcript_id)
+
+  # Pre-allocate result list
+  results <- vector("list", ceiling(n_transcripts / batch_size))
+  batch_idx <- 0
+
+  # Process in batches to reduce memory pressure
+  for (i in seq(1, n_transcripts, by = batch_size)) {
+    batch_idx <- batch_idx + 1
+    end_i <- min(i + batch_size - 1, n_transcripts)
+    batch_size_actual <- end_i - i + 1
+
+    .log_msg(str_interp("  batch ${batch_idx}: processing transcripts ${i}-${end_i}"))
+
+    # Get indices of exons for current batch transcripts
+    batch_tx_ids <- cds_tx_ids[i:end_i]
+
+    # Directly subset exonsgrl using match for efficiency
+    exon_indices <- match(batch_tx_ids, names(exonsgrl))
+    if (any(is.na(exon_indices))) {
+      missing <- batch_tx_ids[is.na(exon_indices)]
+      stop(str_interp("Missing exons for transcripts: ${paste(missing, collapse=', ')}"))
+    }
+
+    # Extract and convert to SimpleList for this batch only
+    exon_subset <- as(exonsgrl[exon_indices], "SimpleList")
+
+    # Map CDS to transcript space for this batch
+    batch_cds <- cdsgrl[i:end_i]
+    trspace_batch <- GenomicFeatures::pmapToTranscripts(batch_cds, exon_subset)
+
+    # Validate and flatten
+    stopifnot(all(elementNROWS(trspace_batch) == 1))
+    trspace_flat <- unlist(trspace_batch)
+    strand(trspace_flat) <- "+"
+
+    # Store result with proper names
+    results[[batch_idx]] <- trspace_flat
+
+    # Free memory before next batch
+    rm(exon_subset, trspace_batch, trspace_flat)
+    if (batch_idx %% 5 == 0) {
+      gc(verbose = FALSE)
+    }
+  }
+
+  # Combine all batches
+  .log_msg("combining batch results")
+  trspacecds <- do.call(c, results)
+  names(trspacecds) <- names(cdsgrl)
+
+  .log_msg(str_interp("completed mapping ${length(trspacecds)} transcripts"))
   trspacecds
 }
 
