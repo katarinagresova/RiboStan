@@ -335,6 +335,23 @@ get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
     # Reduce each element to a single range (min start to max end)
     trspace_reduced <- GenomicRanges::reduce(trspace_batch)
 
+    # A CDS is contiguous in transcript space, so reduction must yield
+    # exactly one range per transcript. More than one indicates a gap or
+    # mapping problem that should error rather than be silently collapsed.
+    nranges <- elementNROWS(trspace_reduced)
+    if (!all(nranges == 1L)) {
+      bad <- names(trspace_reduced)[nranges != 1L]
+      stop(str_interp(paste0(
+        "CDS did not map to a single contiguous transcript-space range ",
+        "for: ${paste(head(bad), collapse = ', ')}"
+      )))
+    }
+
+    # Collapse the length-1 GRangesList to a GRanges (one range per
+    # transcript) so the result matches the documented return type and
+    # downstream start()/end() yield atomic vectors, not IntegerLists.
+    trspace_reduced <- unlist(trspace_reduced, use.names = TRUE)
+
     # Set strand to positive
     strand(trspace_reduced) <- "+"
 
