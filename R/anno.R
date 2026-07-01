@@ -327,16 +327,22 @@ get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
     batch_cds <- cdsgrl[i:end_i]
     trspace_batch <- GenomicFeatures::pmapToTranscripts(batch_cds, exon_subset)
 
-    # Validate and flatten
-    stopifnot(all(elementNROWS(trspace_batch) == 1))
-    trspace_flat <- unlist(trspace_batch)
-    strand(trspace_flat) <- "+"
+    # pmapToTranscripts returns a GRangesList where each element contains
+    # the transcript-space mapping for one CDS. For multi-exon CDS, this
+    # can have multiple ranges (one per exon the CDS spans).
+    # We need to collapse these into a single range per transcript.
 
-    # Store result with proper names
-    results[[batch_idx]] <- trspace_flat
+    # Reduce each element to a single range (min start to max end)
+    trspace_reduced <- reduce(trspace_batch)
+
+    # Set strand to positive
+    strand(trspace_reduced) <- "+"
+
+    # Store result with proper names (names preserved from reduction)
+    results[[batch_idx]] <- trspace_reduced
 
     # Free memory before next batch
-    rm(exon_subset, trspace_batch, trspace_flat)
+    rm(exon_subset, trspace_batch, trspace_reduced)
     if (batch_idx %% 5 == 0) {
       gc(verbose = FALSE)
     }
@@ -345,7 +351,6 @@ get_trspace_cds <- function(cdsgrl, exonsgrl, batch_size = 5000) {
   # Combine all batches
   .log_msg("combining batch results")
   trspacecds <- do.call(c, results)
-  names(trspacecds) <- names(cdsgrl)
 
   .log_msg(str_interp("completed mapping ${length(trspacecds)} transcripts"))
   trspacecds
